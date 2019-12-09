@@ -1,13 +1,8 @@
-# roles/bind/tasks/main.yml
 ---
 
 # Initialise distribution-specific variables
 - name: Source specific variables
-  include_vars: "{{ item }}"
-  with_first_found:
-    - "{{ ansible_distribution }}.yml"
-    - "{{ ansible_os_family }}.yml"
-  tags: bind
+  include_vars: "{{ ansible_os_family }}.yml"
 
 - name: Check whether `bind_zone_master_server_ip` was set
   assert:
@@ -19,7 +14,8 @@
     state: present
   with_items:
     - "{{ bind_packages }}"
-  tags: bind,install
+    - "{{ addon_packages }}"
+  when: zone_entries_only is not defined
 
 - name: Ensure runtime directories referenced in config exist
   file:
@@ -32,9 +28,22 @@
     - "{{ bind_dir }}/dynamic"
     - "{{ bind_dir }}/data"
     - "{{ bind_zone_dir }}"
-    - "{{ bind_zone_dir_guest }}"
-    - "{{ bind_zone_dir_trusted }}"
-  tags: bind
+    - "{{ bind_zone_dir_external }}"
+    - "{{ bind_zone_dir_internal }}"
+    - "{{ bind_keys_dir }}"
+
+- name: Copy DNSSEC keys if not existing
+  copy:
+    src: "var/named/keys"
+    dest: "{{ bind_dir }}"
+    owner: root
+    group: "{{ bind_group }}"
+    mode: 0660
+    # Content should be replaced if we change keys
+    force: yes
+  when:
+    - bind_zone_master_server_ip in ansible_all_ipv4_addresses
+    - zone_entries_only is not defined
 
 - name: Create serial, based on UTC UNIX time
   command: date -u +%s
@@ -42,107 +51,106 @@
   changed_when: false
   run_once: true
   check_mode: false
-  tags: bind
 
-- name: Read forward zone hashes for guest zones
-  shell: 'grep -s "^; Hash:" {{ bind_zone_dir_guest }}/{{ item.name }} || true'
+- name: Read forward zone hashes for external zones
+  shell: 'grep -s "^; Hash:" {{ bind_zone_dir_external }}/{{ item.name }} || true'
   changed_when: false
   check_mode: false
-  register: forward_hashes_guest_temp
+  register: forward_hashes_external_temp
   with_items:
-    - "{{ bind_zone_domains + bind_zone_domains_guest }}"
+    - "{{ bind_zone_domains + bind_zone_domains_external }}"
 
-- name: Read forward zone hashes for trusted zones
-  shell: 'grep -s "^; Hash:" {{ bind_zone_dir_trusted }}/{{ item.name }} || true'
+- name: Read forward zone hashes for internal zones
+  shell: 'grep -s "^; Hash:" {{ bind_zone_dir_internal }}/{{ item.name }} || true'
   changed_when: false
   check_mode: false
-  register: forward_hashes_trusted_temp
+  register: forward_hashes_internal_temp
   with_items:
-    - "{{ bind_zone_domains + bind_zone_domains_trusted }}"
+    - "{{ bind_zone_domains + bind_zone_domains_internal }}"
 
-- name: create dict of forward hashes for guest zones
+- name: create dict of forward hashes for external zones
   set_fact:
-    forward_hashes_guest: "{{ forward_hashes_guest|default([]) + [ {'hash': item.stdout|default(), 'name': item.item.name} ] }}"
+    forward_hashes_external: "{{ forward_hashes_external|default([]) + [ {'hash': item.stdout|default(), 'name': item.item.name} ] }}"
   with_items:
-    - "{{ forward_hashes_guest_temp.results }}"
+    - "{{ forward_hashes_external_temp.results }}"
 
-- name: create dict of forward hashes for trusted zones
+- name: create dict of forward hashes for internal zones
   set_fact:
-    forward_hashes_trusted: "{{ forward_hashes_trusted|default([]) + [ {'hash': item.stdout|default(), 'name': item.item.name} ] }}"
+    forward_hashes_internal: "{{ forward_hashes_internal|default([]) + [ {'hash': item.stdout|default(), 'name': item.item.name} ] }}"
   with_items:
-    - "{{ forward_hashes_trusted_temp.results }}"
+    - "{{ forward_hashes_internal_temp.results }}"
 
-- name: Read reverse ipv4 zone hashes for guest zones
+- name: Read reverse ipv4 zone hashes for external zones
   shell: "grep -s \"^; Hash:\" {{ bind_zone_dir }}/{{ ('.'.join(item.1.replace(item.1+'.','').split('.')[::-1])) }}.in-addr.arpa || true"
   changed_when: false
   check_mode: false
-  register: reverse_hashes_guest_temp
+  register: reverse_hashes_external_temp
   with_subelements:
-    - "{{ bind_zone_domains + bind_zone_domains_guest }}"
+    - "{{ bind_zone_domains + bind_zone_domains_external }}"
     - networks
     - flags:
       skip_missing: true
 
-- name: Read reverse ipv4 zone hashes for trusted zones
-  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_trusted }}/{{ ('.'.join(item.1.replace(item.1+'.','').split('.')[::-1])) }}.in-addr.arpa || true"
+- name: Read reverse ipv4 zone hashes for internal zones
+  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_internal }}/{{ ('.'.join(item.1.replace(item.1+'.','').split('.')[::-1])) }}.in-addr.arpa || true"
   changed_when: false
   check_mode: false
-  register: reverse_hashes_trusted_temp
+  register: reverse_hashes_internal_temp
   with_subelements:
-    - "{{ bind_zone_domains + bind_zone_domains_trusted }}"
+    - "{{ bind_zone_domains + bind_zone_domains_internal }}"
     - networks
     - flags:
       skip_missing: true
 
-- name: create dict of reverse hashes for guest zones
+- name: create dict of reverse hashes for external zones
   set_fact:
-    reverse_hashes_guest: "{{ reverse_hashes_guest|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
+    reverse_hashes_external: "{{ reverse_hashes_external|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
   with_subelements:
-    - "{{ reverse_hashes_guest_temp.results }}"
+    - "{{ reverse_hashes_external_temp.results }}"
     - item
 
-- name: create dict of reverse hashes for trusted zones
+- name: create dict of reverse hashes for internal zones
   set_fact:
-    reverse_hashes_trusted: "{{ reverse_hashes_trusted|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
+    reverse_hashes_internal: "{{ reverse_hashes_internal|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
   with_subelements:
-    - "{{ reverse_hashes_trusted_temp.results }}"
+    - "{{ reverse_hashes_internal_temp.results }}"
     - item
 
 
-- name: Read reverse ipv6 zone hashes for guest zones 
-  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_guest }}/{{ (item.1 | ipaddr('revdns'))[-(9+(item.1|regex_replace('^.*/','')|int)//2):-1] }} || true"
+- name: Read reverse ipv6 zone hashes for external zones
+  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_external }}/{{ (item.1 | ipaddr('revdns'))[-(9+(item.1|regex_replace('^.*/','')|int)//2):-1] }} || true"
   changed_when: false
   check_mode: false
-  register: reverse_hashes_ipv6_guest_temp
+  register: reverse_hashes_ipv6_external_temp
   with_subelements:
-    - "{{ bind_zone_domains + bind_zone_domains_guest }}"
+    - "{{ bind_zone_domains + bind_zone_domains_external }}"
     - ipv6_networks
     - flags:
       skip_missing: true
 
-- name: Read reverse ipv6 zone hashes for trusted zones
-  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_trusted }}/{{ (item.1 | ipaddr('revdns'))[-(9+(item.1|regex_replace('^.*/','')|int)//2):-1] }} || true"
+- name: Read reverse ipv6 zone hashes for internal zones
+  shell: "grep -s \"^; Hash:\" {{ bind_zone_dir_internal }}/{{ (item.1 | ipaddr('revdns'))[-(9+(item.1|regex_replace('^.*/','')|int)//2):-1] }} || true"
   changed_when: false
   check_mode: false
-  register: reverse_hashes_ipv6_trusted_temp
+  register: reverse_hashes_ipv6_internal_temp
   with_subelements:
-    - "{{ bind_zone_domains + bind_zone_domains_trusted }}"
+    - "{{ bind_zone_domains + bind_zone_domains_internal }}"
     - ipv6_networks
     - flags:
       skip_missing: true
 
-- name: create dict of reverse ipv6 hashes for guest zones
+- name: create dict of reverse ipv6 hashes for external zones
   set_fact:
-    reverse_hashes_ipv6_guest: "{{ reverse_hashes_ipv6_guest|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
+    reverse_hashes_ipv6_external: "{{ reverse_hashes_ipv6_external|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
   with_subelements:
-    - "{{ reverse_hashes_ipv6_guest_temp.results }}"
+    - "{{ reverse_hashes_ipv6_external_temp.results }}"
     - item
 
-- name: create dict of reverse ipv6 hashes for trusted zones
+- name: create dict of reverse ipv6 hashes for internal zones
   set_fact:
-    reverse_hashes_ipv6_trusted: "{{ reverse_hashes_ipv6_trusted|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
+    reverse_hashes_ipv6_internal: "{{ reverse_hashes_ipv6_internal|default([]) + [ {'hash': item.0.stdout|default(), 'network': item.1} ] }}"
   with_subelements:
-    - "{{ reverse_hashes_ipv6_trusted_temp.results }}"
+    - "{{ reverse_hashes_ipv6_internal_temp.results }}"
     - item
 
 - name: Set up the machine as a master DNS server
@@ -158,4 +166,3 @@
     name: "{{ bind_service }}"
     state: started
     enabled: true
-  tags: bind

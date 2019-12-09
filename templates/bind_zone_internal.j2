@@ -33,7 +33,7 @@
  #  accordingly
  #}
 {% set _zone = {'hash': _zone_data | string | hash('md5')} %}
-{% for _result in forward_hashes if _result.name == item.name %}
+{% for _result in forward_hashes_internal if _result.name == item.name %}
 {%   set _hash_serial = _result.hash.split(' ')[2:] %}
 {%   if _hash_serial and _hash_serial[0] == _zone['hash'] %}
 {%     set _ = _zone.update({'serial': _hash_serial[1]}) %}

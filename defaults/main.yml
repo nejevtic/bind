@@ -28,8 +28,7 @@ bind_allow_query:
 # Determines whether recursion should be allowed. Typically, an authoritative
 # name server should have recursion turned OFF.
 bind_recursion: false
-bind_allow_recursion:
-  - "any"
+bind_allow_recursion: []
 
 # Allows BIND to be set up as a caching name server
 bind_forward_only: false
@@ -41,8 +40,9 @@ bind_forwarders: []
 bind_rrset_order: "random"
 
 # DNSSEC configuration
-bind_dnssec_enable: true
-bind_dnssec_validation: true
+bind_dnssec_enable: 'yes'
+bind_dnssec_validation: 'no'
+bind_dnssec_lookaside: 'no'
 
 bind_extra_include_files: []
 
@@ -57,3 +57,6 @@ bind_zone_minimum_ttl: "1D"
 bind_zone_dir: "{{ bind_dir }}"
 # File mode for master zone files (needs to be something like 0660 for dynamic updates)
 bind_zone_file_mode: "0640"
+
+bind_caa_issue_value: "swisssign.com"
+bind_caa_iodef_value: "mailto:postmaster@swisssign.com"
