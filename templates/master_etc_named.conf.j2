@@ -54,14 +54,25 @@ logging {
     file "{{ bind_log }}";
     severity dynamic;
     print-time yes;
+    print-severity yes;
   };
 {% if bind_query_log is defined %}
   channel querylog {
     file "{{ bind_query_log }}" versions {{ bind_query_log_versions }} size {{ bind_query_log_size }};
     severity dynamic;
     print-time yes;
+    print-severity yes;
   };
   category queries { querylog; };
+{% endif %}
+{% if bind_dnssec_log is defined %}
+  channel dnssec_log {
+    file "{{ bind_dnssec_log }}" versions {{ bind_dnssec_log_versions }} size {{ bind_dnssec_log_size }};
+    severity debug 10;
+    print-time yes;
+    print-severity yes;
+  };
+  category dnssec { dnssec_log; };
 {% endif %}
 };
 
@@ -75,8 +86,6 @@ key "internal-key" {
   secret "{{ bind_internal_key }}";
 };
 
-
-{% if bind_zone_domains_external is defined %}
 view external {
 
   match-clients { external; };
@@ -91,7 +100,7 @@ include "{{ file }}";
 {% endfor %}
 
 
-{% for bind_zone in bind_zone_domains_external %}
+{% for bind_zone in (bind_zone_domains_external|default([]) + bind_zone_domains) %}
 zone "{{ bind_zone.name }}" IN {
   type master;
   file "{{ bind_zone_dir_external }}/{{ bind_zone.name }}";
@@ -112,82 +121,22 @@ zone "{{ bind_zone.name }}" IN {
   inline-signing yes;
 };
 
-{% if bind_zone.networks is defined %}
-{% for network in bind_zone.networks %}
+{% endfor %}
+
+{% for network in bind_networks_external %}
 zone "{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa" IN {
   type master;
   file "{{ bind_zone_dir_external }}/{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa";
   notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
   allow-update { none; };
-{% endif %}
-  key-directory "{{ bind_keys_dir }}";
-  auto-dnssec maintain;
-  inline-signing yes;
-};
-{% endfor %}
-{% endif %}
-
-{% endfor %}
-
-
-{% if bind_zone_domains is defined %}
-{% for bind_zone in bind_zone_domains %}
-zone "{{ bind_zone.name }}" IN {
-  type master;
-  file "{{ bind_zone_dir_external }}/{{ bind_zone.name }}";
-  notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
-  allow-update { none; };
-{% endif %}
-{% if bind_zone.delegate is defined %}
-  forwarders {};
-{% endif %}
   key-directory "{{ bind_keys_dir }}";
   auto-dnssec maintain;
   inline-signing yes;
 };
 
-{% if bind_zone.networks is defined %}
-{% for network in bind_zone.networks %}
-zone "{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa" IN {
-  type master;
-  file "{{ bind_zone_dir_external }}/{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa";
-  notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
-  allow-update { none; };
-{% endif %}
-  key-directory "{{ bind_keys_dir }}";
-  auto-dnssec maintain;
-  inline-signing yes;
-};
 {% endfor %}
-{% endif %}
-
-{% endfor %}
-{% endif %}
-
 };
-{% endif %}
 
-
-
-{% if bind_zone_domains_internal is defined %}
 view internal {
 
      match-clients { internal; };
@@ -203,7 +152,7 @@ include "{{ file }}";
 include "{{ file }}";
 {% endfor %}
 
-{% for bind_zone in bind_zone_domains_internal %}
+{% for bind_zone in (bind_zone_domains_internal|default([]) + bind_zone_domains) %}
 zone "{{ bind_zone.name }}" IN {
   type master;
   file "{{ bind_zone_dir_internal }}/{{ bind_zone.name }}";
@@ -224,75 +173,18 @@ zone "{{ bind_zone.name }}" IN {
   inline-signing yes;
 };
 
-{% if bind_zone.networks is defined %}
-{% for network in bind_zone.networks %}
+{% endfor %}
+
+{% for network in bind_networks_internal %}
 zone "{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa" IN {
   type master;
   file "{{ bind_zone_dir_internal }}/{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa";
   notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
   allow-update { none; };
-{% endif %}
-  key-directory "{{ bind_keys_dir }}";
-  auto-dnssec maintain;
-  inline-signing yes;
-};
-{% endfor %}
-{% endif %}
-
-{% endfor %}
-
-{% if bind_zone_domains is defined %}
-{% for bind_zone in bind_zone_domains %}
-zone "{{ bind_zone.name }}" IN {
-  type master;
-  file "{{ bind_zone_dir_internal }}/{{ bind_zone.name }}";
-  notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
-  allow-update { none; };
-{% endif %}
-{% if bind_zone.delegate is defined %}
-  forwarders {};
-{% endif %}
   key-directory "{{ bind_keys_dir }}";
   auto-dnssec maintain;
   inline-signing yes;
 };
 
-{% if bind_zone.networks is defined %}
-{% for network in bind_zone.networks %}
-zone "{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa" IN {
-  type master;
-  file "{{ bind_zone_dir_internal }}/{{ ('.'.join(network.replace(network+'.','').split('.')[::-1])) }}.in-addr.arpa";
-  notify yes;
-{% if bind_zone.also_notify is defined %}
-  also-notify  { {{ bind_zone.also_notify|join(';') }}; };
-{% endif %}
-{% if bind_zone.allow_update is defined %}
-  allow-update { {{ bind_zone.allow_update|join(';') }}; };
-{% else %}
-  allow-update { none; };
-{% endif %}
-  key-directory "{{ bind_keys_dir }}";
-  auto-dnssec maintain;
-  inline-signing yes;
-};
 {% endfor %}
-{% endif %}
-
-{% endfor %}
-{% endif %}
-
 };
-{% endif %}
-

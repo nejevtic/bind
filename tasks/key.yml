@@ -1,0 +1,123 @@
+---
+
+- name: Get current keys in the repo for {{ domain }}
+  set_fact:
+    repo_keys: "{{ domain | read_dnskeys(key_path) }}"
+    require_keys:
+      - algorithm: 'ECDSAP256SHA256'
+        type: 'ZSK'
+      - algorithm: 'ECDSAP256SHA256'
+        type: 'KSK'
+    flags:
+      ZSK: '-b 512 -n ZONE'
+      KSK: '-b 512 -f KSK'
+
+- name: Compile keys to build for {{ domain }}
+  set_fact:
+    build_keys: "{{ require_keys | difference(repo_keys | json_query(query)) }}"
+  vars:
+    query: "[*].{algorithm:algorithm,type:type}"
+
+- name: Generate new keys for {{ domain }}
+  delegate_to: localhost
+  shell:
+    cmd: |
+      /usr/sbin/dnssec-keygen -3 -a {{ item.algorithm }} {{ flags[item.type] }} -r /dev/urandom {{ domain }}
+    chdir: "{{ key_path }}"
+  register: new_keys
+  loop: "{{ build_keys }}"
+
+- name: Encrypt keys for {{ domain }}
+  delegate_to: localhost
+  shell:
+    cmd: |
+      ansible-vault encrypt --vault-password-file ~/vaultpasswords {{ item }}.private
+      chmod 0644 {{ item }}.private
+      git add {{ item }}.key {{ item }}.private
+    chdir: "{{ key_path }}"
+  loop: "{{ new_keys.results | json_query('[*].stdout') }}"
+
+# if we changed the keys above, scan the list again
+- name: Get current keys in the repo for {{ domain }}
+  set_fact:
+    repo_keys: "{{ domain | read_dnskeys(key_path) }}"
+  when: build_keys != []
+
+- name: Get the latest keys in the repo for {{ domain }}
+  set_fact:
+    latest_keys: "{{ repo_keys | latest_dnskeys() }}"
+
+- name: Compile keys to remove in repo for {{ domain }}
+  set_fact:
+    remove_keys: "{{ repo_keys | difference(latest_keys) }}"
+
+- name: Remove the old keys for {{ domain }}
+  delegate_to: localhost
+  shell:
+    cmd: git rm -f {{ item.key }} {{ item.private }}
+  ignore_errors: yes
+  loop: "{{ remove_keys }}"
+
+- name: Get live key ids from bind for {{ domain }}
+  set_fact:
+    live_keys: "{{ domain | query_dnskey() }}"
+
+- name: Get the set of keys to add/remove for {{ domain }}
+  set_fact:
+    keys_to_add: "{{ latest_keys | diff_dnskeys(live_keys) }}"
+    keys_to_remove: "{{ live_keys | diff_dnskeys(latest_keys) }}"
+
+- name: Add new key pairs for {{ domain }}
+  become: True
+  copy:
+    src: "{{ item }}"
+    dest: "{{ bind_keys_dir }}"
+    owner: root
+    group: "named"
+    mode: "0660"
+    force: yes
+  loop: "{{ (keys_to_add | json_query('[*].key') + keys_to_add | json_query('[*].private')) | flatten }}"
+
+- name: Remove old key pairs for {{ domain }}
+  become: True
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ (keys_to_remove | json_query('[*].key') + keys_to_remove | json_query('[*].private')) | flatten }}"
+
+- name: Remove the signed zones for {{ domain }}
+  become: True
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ bind_zone_dir_external }}/{{ domain }}.jbk"
+    - "{{ bind_zone_dir_external }}/{{ domain }}.signed"
+    - "{{ bind_zone_dir_external }}/{{ domain }}.signed.jnl"
+    - "{{ bind_zone_dir_internal }}/{{ domain }}.jbk"
+    - "{{ bind_zone_dir_internal }}/{{ domain }}.signed"
+    - "{{ bind_zone_dir_internal }}/{{ domain }}.signed.jnl"
+  when: keys_to_remove | length > 0
+
+- name: Get KSK key file for {{ domain }}
+  set_fact:
+    ksk: "{{ latest_keys | json_query(query) | first }}"
+  vars:
+    query: "[?type=='KSK']"
+
+- name: Get the DS record from the KSK for {{ domain }}
+  delegate_to: localhost
+  shell:
+    cmd: |
+      OLD="{{ bind_cds_records[domain] | default('') }}"
+      NEW=$(dnssec-dsfromkey -2 {{ ksk.key }} | sed -e 's/ IN DS / IN CDS /')
+      echo $NEW
+      [ "${OLD}" = "${NEW}" ]
+  register: ds
+  changed_when: ds.rc == 1
+  failed_when: ds.rc > 1
+
+- name: Save it
+  set_fact:
+    bind_cds_records: "{{ bind_cds_records | combine({ domain: ds.stdout }) }}"
+  when: not ansible_check_mode

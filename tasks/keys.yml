@@ -1,0 +1,29 @@
+---
+
+- name: Define path for the keys in the repo
+  set_fact:
+    key_path: "{{ playbook_dir }}/files/var/named/keys"
+  tags: keys
+
+- name: Process all the domains
+  include: key.yml
+  # Note that we will be running queries against dns01c from ansible02c, hence there's no point
+  # querying the external zone. However, each zone that is defined externally is also available
+  # in the internal zone, albeit with different content
+  with_items: "{{ ( bind_zone_domains + bind_zone_domains_internal ) | json_query('[].name') }}"
+  loop_control:
+    loop_var: domain
+  tags: keys
+
+- name: Process the CDS for safekeeping
+  set_fact:
+    # this is quite intentional, in order to have the variable name itself saved to the file
+    bind_cds_records:
+      bind_cds_records:
+        "{{ bind_cds_records }}"
+
+- name: Save the CDS records
+  delegate_to: localhost
+  copy:
+    content: "{{ bind_cds_records | to_nice_yaml(indent=2, width=1337) }}"
+    dest: "{{ playbook_dir }}/group_vars/dns/cds.yml"
